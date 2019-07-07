@@ -1,0 +1,249 @@
+---
+# tasks file for ansible-role-nsxv
+- name: Register NSX Manager to vCenter
+  nsx_vc_registration:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    vcenter: "{{ vcenter_hostname }}"
+    vcusername: "{{ vcenter_username }}"
+    vcpassword: "{{ vcenter_password }}"
+    accept_all_certs: true
+  register: vc_registration
+  tags: nsx_vc_registration
+
+# configure nsx-manager syslog
+
+- name: Gather vCenter Cluster moid to deploy controllers
+  vcenter_gather_moids:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    datacenter_name: "{{ nsx_ovf['datacenter'] }}"
+    cluster_name: "{{ nsx_ovf['cluster'] }}"
+    validate_certs: False
+  register: vcenter_ctrl_cluster_moid
+  tags: vsphere_facts
+
+- name: vCenter Cluster moid
+  debug:
+    msg: "{{ vcenter_ctrl_cluster_moid }}"
+
+- name: Gather vCenter management datastore moid
+  vcenter_gather_moids:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    datacenter_name: "{{ nsx_ovf['datacenter'] }}"
+    datastore_name: "{{ nsx_ovf['datastore'] }}"
+    validate_certs: False
+  register: vcenter_mgmt_datastore_moid
+  tags: vsphere_facts
+
+- name: datastore moid
+  debug:
+    msg: "{{ vcenter_mgmt_datastore_moid }}"
+
+- name: Gather vCenter management portgroup moid
+  vcenter_gather_moids:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    datacenter_name: "{{ nsx_ovf['datacenter'] }}"
+    portgroup_name: "{{ nsx_controllers['portgroup'] }}"
+    validate_certs: False
+  register: vcenter_mgmt_portgroup_moid
+  tags: vsphere_facts
+
+- name: portgroup moid
+  debug:
+    msg: "{{ vcenter_mgmt_portgroup_moid }}"
+
+- name: Create IP Controller IP Pools
+  nsx_ippool:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    name: "{{ nsx_controllers.ip_pool.name }}"
+    start_ip: "{{ nsx_controllers.ip_pool.start_ip }}"
+    end_ip: "{{ nsx_controllers.ip_pool.end_ip }}"
+    prefix_length: "{{ nsx_controllers.ip_pool.prefix_length }}"
+    gateway: "{{ nsx_controllers.ip_pool.gateway }}"
+    dns_server_1: "{{ nsx_controllers.ip_pool.dns_server_1 }}"
+    dns_server_2: "{{ nsx_controllers.ip_pool.dns_server_2 }}"
+  register: controller_ip_pool
+  tags: controller_nsx_ippools
+
+# need to modify to include default cluster settings (dns,ntp, etc.)
+# also include folder to deploy to
+- name: Create NSX Controller cluster
+  nsx_controllers:
+      nsxmanager_spec: "{{ nsx_manager_spec }}"
+      password: "{{ nsx_controllers['password'] }}"
+      deploytype: "{{ nsx_controllers['deploytype'] }}"
+      syslog_server: "{{ nsx_controllers['syslog_server'] }}"
+      ippool_id: "{{ controller_ip_pool.ippool_id }}"
+      resourcepool_moid: "{{ vcenter_ctrl_cluster_moid.object_id }}"
+      datastore_moid: "{{ vcenter_mgmt_datastore_moid.object_id }}"
+      network_moid: "{{ vcenter_mgmt_portgroup_moid.object_id }}"
+      state: present
+  tags: nsx_controllers
+
+- name: Apply NSX License
+  vcenter_nsx_license:
+    vcenter: "{{ vcenter_hostname }}"
+    vcenter_user: "{{ vcenter_username }}"
+    vcenter_passwd: "{{ vcenter_password }}"
+    license_key: "{{ nsx_license }}"
+  when: nsx_license is defined
+  register: nsxlic
+  tags: nsx_license
+
+- name: Gather vCenter compute Cluster moid
+  vcenter_gather_moids:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    datacenter_name: "{{ nsx_ovf['datacenter'] }}"
+    cluster_name: "{{ nsx_ovf['cluster']}}"
+    validate_certs: False
+  register: vcenter_compute_cluster_moid
+  tags: vsphere_facts
+
+- name: Install VIBs (prepare) the cluster
+  nsx_cluster_prep:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    cluster_moid: "{{ vcenter_compute_cluster_moid.object_id }}"
+  register: cluster_prep_compute
+  tags: nsx_cluster_prep
+
+
+- name: Gather vCenter Transport DVS moid
+  vcenter_gather_moids:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    datacenter_name: "{{ nsx_ovf['datacenter'] }}"
+    dvs_name: "{{ nsx_vtep['dvswitch_name'] }}"
+    validate_certs: False
+  register: vcenter_dvs_moid
+  tags: vsphere_facts
+
+- name: Create VTEP IP Pools
+  nsx_ippool:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    name: "{{ nsx_vtep['ip_pool']['name'] }}"
+    start_ip: "{{ nsx_vtep['ip_pool']['start_ip'] }}"
+    end_ip: "{{ nsx_vtep['ip_pool']['end_ip'] }}"
+    prefix_length: "{{ nsx_vtep['ip_pool']['prefix_length'] }}"
+    gateway: "{{ nsx_vtep['ip_pool']['gateway'] }}"
+    dns_server_1: "{{ nsx_vtep['ip_pool']['dns_server_1'] }}"
+    dns_server_2: "{{ nsx_vtep['ip_pool']['dns_server_2'] }}"
+  register: vtep_ip_pool
+  tags: vtep_nsx_ippools
+
+
+- name: VXLAN Prep (configure VTEP) on cluster
+  nsx_vxlan_prep:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    cluster_moid: "{{ vcenter_compute_cluster_moid.object_id }}"
+    dvs_moid: "{{ vcenter_dvs_moid.object_id }}"
+    ippool_id: "{{ vtep_ip_pool.ippool_id }}"
+    vlan_id: "{{ nsx_vtep['vlan_id'] }}"
+  register: vxlan_prep
+  tags: nsx_vxlan_prep
+
+
+- name: Create Segment Id Pool
+  nsx_segment_id_pool:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    idpoolstart: "{{ nsx_vtep['segement_id_pool']['start'] }}"
+    idpoolend: "{{ nsx_vtep['segement_id_pool']['end'] }}"
+    mcast_enabled: "{{ nsx_vtep['segement_id_pool']['mcast_enabled'] }}"
+  register: segment_pool
+  tags: nsx_segment_pool
+
+
+- name: Add a Transport Zone with the Cluters as members
+  nsx_transportzone:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: 'present'
+    name: "{{ nsx_transport_zone['name'] }}"
+    controlplanemode: "{{ nsx_transport_zone['replication_mode'] }}"
+    description: "{{ nsx_transport_zone['description'] }}"
+    cluster_moid_list:
+      - "{{ vcenter_compute_cluster_moid.object_id }}"
+  register: transport_zone
+  tags: nsx_transport_zone
+
+- name: create logicalSwitches
+  nsx_logical_switch:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    name: "{{ item.name }}"
+    transportzone: "{{ item.transportzone }}"
+    controlplanemode: "{{ item.controlplanemode }}"
+    description: "{{ item.description }}"
+    state: present
+  loop: "{{ nsx_logical_switches }}"
+  register: create_logical_switches
+
+- name: ESG creation
+  nsx_edge_router:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    name: "{{ nsx_edge_router['name'] }}"
+    description: "{{ nsx_edge_router['description'] }}"
+    datacenter_moid: "{{ vcenter_ctrl_cluster_moid.datacenter_moid }}"
+    resourcepool_moid: "{{ vcenter_ctrl_cluster_moid.object_id }}"
+    datastore_moid: "{{ vcenter_mgmt_datastore_moid.object_id }}"
+    interfaces: "{{ nsx_edge_router['interfaces'] }}"
+    remote_access: 'true'
+    username: "{{ nsx_edge_router['username'] }}"
+    password: "{{ nsx_edge_router['password'] }}"
+    firewall: "{{ nsx_edge_router['firewall'] }}"
+    ha_enabled: "{{ nsx_edge_router['ha_enabled'] }}"
+  register: create_esg
+  tags: esg_create
+
+- name: Configure OSPF ESG
+  nsx_ospf:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    edge_name: "{{ nsx_ospf_esg['edge_name'] }}"
+    router_id: "{{ nsx_ospf_esg['router_id'] }}"
+    areas: "{{ nsx_ospf_esg['areas'] }}"
+    area_map: "{{ nsx_ospf_esg['area_map'] }}"     
+  register: ospf_esg
+  tags: ospf_esg
+
+- name: DLR creation
+  nsx_dlr:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    name: "{{ nsx_dlr_router['name'] }}"
+    description: "{{ nsx_dlr_router['description'] }}"
+    datacenter_moid: "{{ vcenter_ctrl_cluster_moid.datacenter_moid }}"
+    resourcepool_moid: "{{ vcenter_ctrl_cluster_moid.object_id }}"
+    datastore_moid: "{{ vcenter_mgmt_datastore_moid.object_id }}"
+    mgmt_portgroup_moid: "{{ vcenter_mgmt_portgroup_moid.object_id }}"
+    interfaces: "{{ nsx_dlr_router['interfaces'] }}"
+    remote_access: "{{ nsx_dlr_router['remote_access'] }}"
+    username: "{{ nsx_dlr_router['username'] }}"
+    password: "{{ nsx_dlr_router['password'] }}"
+    ha_enabled: "{{ nsx_dlr_router['ha_enabled'] }}"
+  register: create_dlr
+  tags: dlr_create
+
+- name: Configure OSPF DSLR
+  nsx_ospf:
+    nsxmanager_spec: "{{ nsx_manager_spec }}"
+    state: present
+    edge_name: "{{ nsx_ospf_dlr['edge_name'] }}"
+    router_id: "{{ nsx_ospf_dlr['router_id'] }}"
+    protocol_address: "{{ nsx_ospf_dlr['protocol_address'] }}"
+    forwarding_address: "{{ nsx_ospf_dlr['forwarding_address'] }}"
+    areas: "{{ nsx_ospf_dlr['areas'] }}"
+    area_map: "{{ nsx_ospf_dlr['area_map'] }}"
+  register: ospf_dlr
+  tags: ospf_dlr

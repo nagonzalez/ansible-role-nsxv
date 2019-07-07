@@ -1,0 +1,123 @@
+---
+# defaults file for ansible-role-nsxv
+# ------------------------------------------------------------------------------
+# NSX
+# ------------------------------------------------------------------------------
+nsx_license: changeme
+nsx_ovf:
+  datacenter: garage
+  cluster: r610
+  datastore: vsanDatastore
+  folder: vmware
+  vm_name: nsx-manager
+  networks:
+    "Management Network": vlan-32-vmware-vsphere-mgmt
+  ova_path: /Users/noe.gonzalez/Downloads/VMware-NSX-Manager-6.4.5-13282012.ova
+  properties:
+    vsm_cli_passwd_0: changeme
+    vsm_cli_en_passwd_0: changeme
+    vsm_hostname: nsx-manager
+    vsm_ip_0: 172.31.32.3
+    vsm_netmask_0: 255.255.255.0
+    vsm_gateway_0: 172.31.32.254
+    vsm_dns1_0: 172.31.3.2
+    vsm_domain_0: noeg.wtf
+    vsm_ntp_0: '0.north-america.pool.ntp.org,1.north-america.pool.ntp.org,2.north-america.pool.ntp.org,3.north-america.pool.ntp.org'
+    vsm_isSSHEnabled: True
+    vsm_isCEIPEnabled: False
+
+nsx_manager_spec:
+  raml_file: /Users/noe.gonzalez/.ansible/roles/nagonzalez.nsxv/files/nsxvapi.raml
+  host: nsx-manager.noeg.wtf
+  user: admin
+  password: changeme
+
+nsx_controllers:
+  portgroup: vlan-32-vmware-vsphere-mgmt
+  password: changeme
+  deploytype: full
+  syslog_server: loginsight.noeg.wtf
+  ip_pool:
+    name: nsx-controllers
+    start_ip: 172.31.32.10
+    end_ip: 172.31.32.19
+    prefix_length: 24
+    gateway: 172.31.32.254
+    dns_server_1: 172.31.3.2
+    dns_server_2: ''
+
+nsx_vtep:
+  dvswitch_name: DSwitch
+  vlan_id: 33
+  segement_id_pool:
+    start: 5000
+    end: 5099
+    mcast_enabled: False
+  ip_pool:
+    name: nsx-vtep
+    start_ip: 172.31.33.10
+    end_ip: 172.31.33.19
+    prefix_length: 24
+    gateway: 172.31.33.254
+    dns_server_1: 172.31.3.2
+    dns_server_2: ''
+
+nsx_transport_zone:
+  name: nsx-transport-zone
+  description: Default Transport Zone
+  replication_mode: UNICAST_MODE
+
+nsx_logical_switches:
+  - name: 172-31-50-0-transport
+    transportzone: nsx-transport-zone
+    controlplanemode: UNICAST_MODE
+    description: virtual to physical connection
+  - name: 172-31-51-0-rancher
+    transportzone: nsx-transport-zone
+    controlplanemode: UNICAST_MODE
+    description: rancher network
+
+nsx_edge_router:
+  name: nsx-edge-service-gateway
+  description: edge service gateway to connect to physical world
+  interfaces:
+    vnic0: {ip: 172.31.32.253, prefix_len: 24, portgroup_id: "{{ vcenter_mgmt_portgroup_moid.object_id }}", name: uplink-vnic-vlan32, iftype: uplink}
+    vnic1: {ip: 172.31.50.253, prefix_len: 24, logical_switch: 172-31-50-0-transport, name: internal-vnic-vxlan50, iftype: internal}
+  default_gateway: 172.31.32.254
+  remote_access: True
+  username: admin
+  password: changeme
+  firewall: False
+  ha_enabled: True
+
+nsx_ospf_esg:
+  edge_name: nsx-edge-service-gateway
+  router_id: 172.31.32.253
+  areas:
+    - { area_id: 0 }
+    - { area_id: 100 }
+  area_map:
+    - { area_id: 0, vnic: 0 }  
+    - { area_id: 100, vnic: 1 }
+
+nsx_dlr_router:
+  name: nsx-distributed-logical-router
+  description: distibuted logical router for virtual world
+  interfaces:
+    - {name: uplink-vnic-vxlan50, ip: 172.31.50.252, prefix_len: 24, logical_switch: 172-31-50-0-transport, iftype: uplink}
+    - {name: internal-vnic-vxlan51, ip: 172.31.51.252, prefix_len: 24, logical_switch: 172-31-51-0-rancher, iftype: internal}
+  default_gateway: 172.31.50.253
+  remote_access: True
+  username: admin
+  password: changeme
+  ha_enabled: True
+
+nsx_ospf_dlr:
+  edge_name: nsx-distributed-logical-router
+  router_id: 172.31.50.252
+  protocol_address: 172.31.50.251
+  forwarding_address: 172.31.50.252
+  areas:
+    - { area_id: 100 }
+  area_map:
+    - { area_id: 100, vnic: 2 }
