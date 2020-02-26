@@ -6,7 +6,7 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-ansible = "==2.8.1"
+ansible = "==2.8.8"
 nsxramlclient = "==2.0.7"
 pyvmomi = "==6.7.1.2018.12"
 requests = "==2.22.0"
